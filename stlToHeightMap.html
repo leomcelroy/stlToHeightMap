@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Model and Heightmap Viewer</title>
+    <style>
+        body { margin: 0; display: flex; flex-direction: column; }
+
+        .canvas-container {
+            display: flex;
+            width: 100%;
+            justify-content: space-around;
+        }
+
+        canvas { 
+            width: 500px; 
+            height: 500px; 
+        }
+
+        #drop_zone { 
+            width: 200px;
+            height: 200px;
+            background: rgba(100,100,100,0.5); 
+            border: 2px solid black;  <!-- Corrected the border style -->
+        }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.133.1/build/three.module.js",
+            "STLLoader": "https://unpkg.com/three@0.133.1/examples/jsm/loaders/STLLoader.js",
+            "OrbitControls": "https://unpkg.com/three@0.133.1/examples/jsm/controls/OrbitControls.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <button id="exportHeightmap">Export Heightmap</button>
+    <div id="drop_zone">Drop your STL file here</div>
+    <div class="canvas-container">
+        <canvas id="c"></canvas>
+        <canvas id="heightmapCanvas"></canvas>
+    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { STLLoader } from 'STLLoader';
+        import { OrbitControls } from 'OrbitControls';
+
+        var scene = new THREE.Scene();
+
+        var camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+        
+        const c = document.getElementById('c');
+        const hc = document.getElementById('heightmapCanvas')
+        var renderer = new THREE.WebGLRenderer({ canvas: c });
+        var controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.screenSpacePanning = false;
+        
+        camera.position.z = 5;
+
+        var heightmapScene = new THREE.Scene();
+        var heightmapRenderer = new THREE.WebGLRenderer({ canvas: hc });
+        renderer.setSize(500, 500);
+        heightmapRenderer.setSize(500, 500);
+
+        var heightmapMaterial = new THREE.ShaderMaterial({
+            vertexShader: `
+                varying vec3 vPosition;
+                void main() {
+                    vPosition = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vPosition;
+                uniform float minHeight;
+                uniform float maxHeight;
+                void main() {
+                    float normalizedHeight = (vPosition.z - minHeight) / (maxHeight - minHeight);
+                    gl_FragColor = vec4(vec3(normalizedHeight), 1.0);
+                }
+            `,
+            uniforms: {
+                minHeight: { value: 0 },
+                maxHeight: { value: 1 },
+                cameraPos: { value: [0, 0, 0] }
+            }
+        });
+
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        dropZone.addEventListener('drop', function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            var files = e.dataTransfer.files;
+            if (files.length > 0) {
+                var reader = new FileReader();
+                reader.onload = function (e) {
+                    var loader = new STLLoader();
+                    var geometry = loader.parse(e.target.result);
+
+                    geometry.computeBoundingBox();
+                    var minHeight = geometry.boundingBox.min.z;
+                    var maxHeight = geometry.boundingBox.max.z;
+
+                    heightmapMaterial.uniforms.minHeight.value = minHeight;
+                    heightmapMaterial.uniforms.maxHeight.value = maxHeight;
+
+                    var material = new THREE.MeshNormalMaterial();
+                    var mesh = new THREE.Mesh(geometry, material);
+                    scene.add(mesh);
+                    
+                    var heightmapMesh = mesh.clone();
+                    heightmapMesh.traverse(function (node) {
+                        if (node.isMesh) {
+                            node.material = heightmapMaterial;
+                        }
+                    });
+                    heightmapScene.add(heightmapMesh);
+                };
+                reader.readAsArrayBuffer(files[0]);
+            }
+        });
+
+        var animate = function () {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+            heightmapRenderer.render(heightmapScene, camera);
+        };
+
+        document.getElementById('exportHeightmap').addEventListener('click', exportHeightmap);
+
+        function exportHeightmap() {
+            const oldSize = 500;
+
+            const size = 4000;
+            setSize(size);
+            function setSize(size) {
+                c.width = size;
+                c.height = size;
+                hc.width = size;
+                hc.height = size;
+                renderer.setSize(size, size);
+                heightmapRenderer.setSize(size, size);
+            }
+
+            var offscreenCanvas = document.createElement('canvas');
+            offscreenCanvas.width = size;
+            offscreenCanvas.height = size;
+            var offscreenRenderer = new THREE.WebGLRenderer({ canvas: offscreenCanvas });
+            offscreenRenderer.render(heightmapScene, camera);
+            var imgData = offscreenCanvas.toDataURL();
+            var a = document.createElement('a');
+            a.href = imgData;
+            a.download = 'heightmap.png';
+            a.click();
+
+            setSize(oldSize);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
